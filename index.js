@@ -14,52 +14,77 @@
 
     function ElmCompiler(config) {
       var elm_config = {};
-      elm_config.outputFolder = (config.plugins.elmBrunch || {}).outputFolder || path.join(config.paths.public, 'js');
-      elm_config.mainModules = (config.plugins.elmBrunch || {}).mainModules;
-      elm_config.elmFolder = (config.plugins.elmBrunch || {}).elmFolder || null;
+
+      var elmBrunchConfig = (config.plugins.elmBrunch || {});
+      elm_config.outputFile = elmBrunchConfig.outputFile || path.join(config.paths.public, 'compiled-elm.js');
+      elm_config.elmFolder = elmBrunchConfig.elmFolder || null;
+
       this.elm_config = elm_config;
-      this.skipedOnInit = {}
+      this.seenAfterInit = {};
+      this.mainFiles = [];
     }
 
     function escapeRegExp(str) {
       return str.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
     }
 
+    function isMainFile(inFile) {
+      var fs = require('fs');
+      contents = fs.readFileSync(inFile, 'utf8');
+
+      lines = contents.split("\n");
+
+      foundMainLine = false;
+      lines.forEach(function(line) {
+        if (line.startsWith("main =")) {
+          foundMainLine = true;
+        }
+      })
+
+      return foundMainLine;
+    }
+
     ElmCompiler.prototype.compile = function(data, inFile, callback) {
       var elmFolder = this.elm_config.elmFolder;
-      var file = inFile;
-      if (elmFolder) {
-        file = inFile.replace(new RegExp('^' + escapeRegExp(elmFolder) + '[/\\\\]?'), '');
+      var outputFile = this.elm_config.outputFile;
+      var mainFiles = this.mainFiles;
+      var buildFile = this.seenAfterInit[inFile] || false;
+
+      // Autodetect main files and save them in a list
+      relativePath = inFile.replace(new RegExp('^' + escapeRegExp(elmFolder) + '[/\\\\]?'), '');
+      if (isMainFile(inFile) && mainFiles.indexOf(relativePath) == -1) {
+        mainFiles.push(relativePath);
+        buildFile = true;
       }
-      var modules = this.elm_config.mainModules || [file];
-      var file_is_module_index = modules.indexOf(file);
-      if (file_is_module_index >= 0) {
-        modules = [modules[file_is_module_index]];
+
+      // Automatially remove main files from the list if they are removed from disk
+      // if(!fs.accessSync(inFile, fs.F_OK)) { }
+      // TODO
+
+      // Don't build it once per regular file on boot
+      this.seenAfterInit[inFile] = true;
+
+      // Build all main files to a single javascript file
+      if(buildFile) {
+        var sourcePaths = mainFiles.join(" ")
+        elmCompile(sourcePaths, elmFolder, outputFile, callback);
       } else {
-        if (this.skipedOnInit[file]){
-        } else {
-          this.skipedOnInit[file] = true;
-          return callback(null, '');
-        }
+        callback(null, "");
       }
-      var outputFolder = this.elm_config.outputFolder;
-      return modules.forEach(function(src) {
-        var moduleName;
-        moduleName = path.basename(src, '.elm').toLowerCase();
-        return elmCompile(src, elmFolder, path.join(outputFolder, moduleName + '.js'), callback);
-      });
     };
 
     return ElmCompiler;
-
   })();
 
   elmCompile = function(srcFile, elmFolder, outputFile, callback) {
     var info = 'Elm compile: ' + srcFile;
+
     if (elmFolder) {
       info += ', in ' + elmFolder;
     }
+
     info += ', to ' + outputFile;
+
     console.log(info);
 
     var command = 'elm make --yes --output ' + outputFile + ' ' + srcFile;
